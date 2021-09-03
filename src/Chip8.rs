@@ -69,16 +69,41 @@ impl Chip8 {
             let addr = ((opcode & 0xF000) >> SHIFT12) as u8;
             let x = ((opcode & 0x0F00) >> SHIFT8) as u8;
             let y = ((opcode & 0x00F0) >> SHIFT4) as u8;
-            let n = ((opcode & 0x000F) >> SHIFT0) as u8;
+            let kk = ((opcode & 0x000F) >> SHIFT0) as u8;
             
             let nnn = opcode & 0xFFF;
+            //let kk = opcode & 0x000F;
 
-            match (addr, x, y, n) {
-                (0, 0, 0, 0) => { return; },
-                (0, 0, 0xE, 0xE) => self.ret(),
-                (0x2, _, _, _) => self.call(nnn),
-                (0x8, _, _, 0x4) => self.add_xy(x, y),
-                _ => todo!{"opcode {:04x}", opcode},
+            match (addr, x, y, kk) {
+                (0, 0, 0, 0)        => { return; },
+                (0xE0, _, _, _)     => self.clear_display(),
+                (0, 0, 0xE, 0)      => self.ret(),
+                (0x1, _, _, _)      => self.jump_to(nnn),
+                (0x2, _, _, _)      => self.call(nnn),
+                
+                (0x3, _, _, _)      => self.skip_vx_equal_to_byte(x, kk),
+                (0x4, _, _, _)      => self.skip_vx_not_equal_to_byte(x, kk),
+                (0x5, _, _, _)      => self.skip_vx_equal_vy(x, y),
+                
+                (0x6, _, _, _)      => self.set_vx_to_value(x, kk),
+                (0x7, _, _, _)      => self.add_value_vx(x, kk),
+
+                (0x8, _, _, _)      => match(x, y, kk) {
+                    (_, _, 0x0)     => self.put_vy_in_vx(x, y), //or_vx_vy_put_result_in_vx
+                    (_, _, 0x1)     => self.or_vx_vy_put_result_in_vx(x, y),
+                    (_, _, 0x2)     => self.and_vx_vy_put_result_in_vx(x, y),
+                    (_, _, 0x3)     => self.xor_vx_vy_put_result_in_vx(x, y),      
+                    (_, _, 0x4)     => self.add_vx_vy_put_result_in_vx(x, y),
+                    (_, _, 0x5)     => self.sub_vx_vy_put_result_in_vx(x, y),
+                    (_, _, 0x6)     => self.shift_vx_right(x),
+                    (_, _, 0x7)     => self.sub_vy_vx_put_result_in_vx(x, y),
+                    (_, _, 0x8)     => self.shift_vx_left(x),
+                    _               => todo!{"unknown opcode{:04x}", opcode},
+                },
+                (0x9, _, _, _)      => self.skip_vx_not_equal_vy(x, y),
+                
+
+                _                   => todo!{"unknown opcode {:04x}", opcode},
             }
         }
     }
@@ -87,6 +112,23 @@ impl Chip8 {
 
 // Seperate Impl block for the cpu operations
 impl Chip8 {
+    fn clear_display(&self) {
+        // should clear monitor.
+    }
+
+    fn ret(&mut self) {
+        if self.stack_pointer == 0 {
+            panic!("Stack underflow");
+        }
+
+        self.stack_pointer -= 1;
+        self.index_memory = self.stack[self.stack_pointer] as usize;
+    }
+
+    fn jump_to(&mut self, addr: u16) {
+        self.index_memory = addr as usize;
+    }
+
     fn call(&mut self, addr: u16) {
         let sp = self.stack_pointer;
         let stack = &mut self.stack;
@@ -100,26 +142,128 @@ impl Chip8 {
         self.index_memory = addr as usize;
     }
 
-    fn ret(&mut self) {
-        if self.stack_pointer == 0 {
-            panic!("Stack underflow");
+    // Skip instruction/operation when registers and value matches or not matchtes.
+    fn skip_vx_equal_to_byte(&mut self, reg_index: u8, byte: u8) {
+        let vx_value = self.registers[reg_index as usize];
+        if vx_value == byte {
+            self.index_memory += 2;
         }
-
-        self.stack_pointer -= 1;
-        self.index_memory = self.stack[self.stack_pointer] as usize;
     }
 
-    fn add_xy(&mut self, x: u8, y: u8) {
-        let arg1 = self.registers[x as usize];
-        let arg2 = self.registers[y as usize];
+    fn skip_vx_not_equal_to_byte(&mut self, reg_index: u8, byte: u8) {
+        let vx_value = self.registers[reg_index as usize];
+        if vx_value != byte {
+            self.index_memory += 2;
+        }
+    }
 
-        let (val, overflow_detected) = arg1.overflowing_add(arg2);
-        self.registers[x as usize] = val;
+    fn skip_vx_equal_vy(&mut self, reg_x_index: u8, reg_y_index: u8) {
+        let vx_value = self.registers[reg_x_index as usize];
+        let vy_value = self.registers[reg_y_index as usize];
+        if vx_value == vy_value {
+            self.index_memory += 2;
+        }
+    }
+
+    fn skip_vx_not_equal_vy(&mut self, reg_x_index: u8, reg_y_index: u8) {
+        let vx_value = self.registers[reg_x_index as usize];
+        let vy_value = self.registers[reg_y_index as usize];
+        if vx_value != vy_value {
+            self.index_memory += 2;
+        }
+    }
+
+    // Set register values
+    fn set_vx_to_value(&mut self, reg_x_index: u8, byte: u8) {
+        self.registers[reg_x_index as usize] = byte;
+    }
+
+    fn add_value_vx(&mut self, reg_x_index: u8, byte: u8) {
+        self.registers[reg_x_index as usize] += byte;
+    }
+
+    fn put_vy_in_vx(&mut self,  reg_x_index: u8, reg_y_index: u8) {
+        let vy_value = self.registers[reg_y_index as usize];
+        self.registers[reg_x_index as usize] = vy_value;
+    }
+
+    // bitwise operations
+    fn or_vx_vy_put_result_in_vx(&mut self, reg_x_index: u8, reg_y_index: u8) {
+        let vx_value = self.registers[reg_x_index as usize];
+        let vy_value = self.registers[reg_y_index as usize];
+        self.registers[reg_x_index as usize] = vx_value | vy_value;
+    }
+
+    fn and_vx_vy_put_result_in_vx(&mut self, reg_x_index: u8, reg_y_index: u8) {
+        let vx_value = self.registers[reg_x_index as usize];
+        let vy_value = self.registers[reg_y_index as usize];
+        self.registers[reg_x_index as usize] = vx_value & vy_value;
+    }
+
+    fn xor_vx_vy_put_result_in_vx(&mut self, reg_x_index: u8, reg_y_index: u8) {
+        let vx_value = self.registers[reg_x_index as usize];
+        let vy_value = self.registers[reg_y_index as usize];
+        self.registers[reg_x_index as usize] = vx_value ^ vy_value;
+    }
+
+    // Arithmetic operations
+    fn add_vx_vy_put_result_in_vx(&mut self, reg_x_index: u8, reg_y_index: u8) {
+        let vx_value = self.registers[reg_x_index as usize];
+        let vy_value = self.registers[reg_y_index as usize];
+
+        let (val, overflow_detected) = vx_value.overflowing_add(vy_value);
+        self.registers[reg_x_index as usize] = val;
 
         if overflow_detected {
             self.registers[0xF] = 1;
         } else {
             self.registers[0xF] = 0;
         }
+    }
+
+    fn sub_vx_vy_put_result_in_vx(&mut self, reg_x_index: u8, reg_y_index: u8) {
+        let vx_value = self.registers[reg_x_index as usize];
+        let vy_value = self.registers[reg_y_index as usize];
+
+        if vx_value > vy_value {
+            self.registers[0xF] = 1;
+            let val = vx_value - vy_value;
+            self.registers[reg_x_index as usize] = val;
+        } else {
+            self.registers[0xF] = 0;
+        }
+    }
+
+    fn shift_vx_right(&mut self, reg_x_index: u8) {
+        let vx_value = self.registers[reg_x_index as usize];
+        if vx_value == 1 {
+            self.registers[0xF] = 1;
+        } else {
+            self.registers[0xF] = 0;
+        }
+        self.registers[reg_x_index as usize] = vx_value / 2;
+    }
+
+    fn sub_vy_vx_put_result_in_vx(&mut self, reg_x_index: u8, reg_y_index: u8) {
+        let vx_value = self.registers[reg_x_index as usize];
+        let vy_value = self.registers[reg_y_index as usize];
+
+        if vy_value > vx_value {
+            self.registers[0xF] = 1;
+            let val = vy_value - vx_value;
+            self.registers[reg_x_index as usize] = val;
+        } else {
+            self.registers[0xF] = 0;
+        }
+    }
+
+    fn shift_vx_left(&mut self, reg_x_index: u8) {
+        let vx_value = self.registers[reg_x_index as usize];
+        if vx_value == 0x80 {
+            self.registers[0xF] = 1;
+        } else {
+            self.registers[0xF] = 0;
+        }
+        self.registers[reg_x_index as usize] = vx_value * 2;
     }
 }
