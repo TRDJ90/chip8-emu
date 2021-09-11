@@ -1,4 +1,4 @@
-mod chip8;
+mod cpu;
 mod monitor;
 
 use pixels::{Error, Pixels, SurfaceTexture};
@@ -8,9 +8,8 @@ use winit::event_loop::{ControlFlow, EventLoop};
 use winit::window::WindowBuilder;
 use winit_input_helper::WinitInputHelper;
 
-use crate::chip8::Chip8;
-use crate::monitor::Monitor;
-use crate::monitor::{WIDTH, HEIGHT};
+use crate::monitor::monitor::{Monitor,WIDTH, HEIGHT};
+use crate::cpu::cpu::Chip8;
 
 const SCALING: u32 = 20;
 
